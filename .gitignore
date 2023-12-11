@@ -1,0 +1,11 @@
+ControlNet-v1-1-nightly/
+segment-anything/
+tiny-cuda-nn/
+
+**/.ipynb_checkpoints
+**/__pycache__
+*.npy
+*.npz
+*.dae
+data
+logs
