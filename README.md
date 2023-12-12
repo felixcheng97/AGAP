@@ -2,7 +2,7 @@
 
 **Official PyTorch Implementation for [Learning Naturally Aggregated Appearance for Efficient 3D Editing](https://felixcheng97.github.io/AGAP/).**
 
-**External Links: [Arxiv](https://klchengad.student.ust.hk/research/agap/paper.pdf), [Paper](https://klchengad.student.ust.hk/research/agap/paper.pdf), [Project Page](https://felixcheng97.github.io/AGAP/)**
+**External Links: [Arxiv](https://arxiv.org/abs/2312.06657), [Paper](https://klchengad.student.ust.hk/research/agap/paper.pdf), [Project Page](https://felixcheng97.github.io/AGAP/)**
 
 > **Learning Naturally Aggregated Appearance for Efficient 3D Editing** <br>
 >  Ka Leong Cheng<sup>1,2</sup>, Qiuyu Wang<sup>2</sup>, Zifan Shi<sup>1,2</sup>, Kecheng Zheng<sup>2,3</sup>, Yinghao Xu<sup>2,4</sup>, Hao Ouyang<sup>1,2</sup>, Qifeng Chen<sup>1&dagger;</sup>, Yujun Shen<sup>2&dagger;</sup> <br>
