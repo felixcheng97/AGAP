@@ -109,7 +109,7 @@ To edit a pre-trained scene (*e.g.*, PE model of the *trex* scene in the LLFF da
 
 ![](./figures/teaser.jpg)
 
-### 1. Scene Stylizaiton
+### 1. Scene Stylization
 For scene stylization, we make use of ControlNet to do global stylization on the canonical image given a text prompt. You could install the ControlNet v1.1 through the official github at [here](https://github.com/lllyasviel/ControlNet-v1-1-nightly.git) and use "gradio" for an interactive editing. Alternatively, you can also try their online deployment on hugging face at [here](https://huggingface.co/spaces/hysts/ControlNet-v1-1).
 
 Note: it is suggested to ensure the edited canonical image has the same resolution as the pre-edit canonical image to avoid resizing when testing. The demo cases of scene stylization shown in the main paper and the project page are mainly based on the "Lineart" and "Lineart (anime)" model of ControlNet v1.1.
