@@ -37,8 +37,8 @@ data = dict(
 
     # Below are forward-facing specific settings.
     selected_frames=None,
-    xyz_min=[-100., -100., -100.],
-    xyz_max=[ 100.,  100.,  100.],
+    # xyz_min=[-100., -100., -100.],
+    # xyz_max=[ 100.,  100.,  100.],
     move_back=False,
 
     # Below are panorama specific settings.
@@ -58,7 +58,7 @@ coarse_train = dict(
     lrate_decay=20,               # lr decay by 0.1 after every lrate_decay*1000 steps
     pervoxel_lr=True,             # view-count-based lr
     pervoxel_lr_downrate=1,       # downsampled image for computing view-count-based lr
-    ray_sampler='random',         # ray sampling strategies
+    ray_sampler='flatten',         # ray sampling strategies
     weight_main=1.0,              # weight of photometric loss
     weight_entropy_last=0.01,     # weight of background entropy loss
     weight_nearclip=0,
@@ -74,6 +74,7 @@ coarse_train = dict(
     pg_scale=[],                  # checkpoints for progressive scaling
     pg_image_scale=[],
     pg_equ_scale=[],
+    pg_msi_scale=[],
     decay_after_scale=1.0,        # decay act_shift after scaling
     skip_zero_grad_fields=[],     # the variable name to skip optimizing parameters w/ zero grad in each iteration
     maskout_lt_nviews=0,
@@ -83,7 +84,7 @@ fine_train = deepcopy(coarse_train)
 fine_train.update(dict(
     N_iters=20000,
     pervoxel_lr=False,
-    ray_sampler='in_maskcache',
+    ray_sampler='flatten',
     weight_entropy_last=0.001,
     weight_rgbper=0.01,
     skip_zero_grad_fields=['density', 'k0'],
@@ -92,6 +93,7 @@ fine_train.update(dict(
 ''' Template of model and rendering options
 '''
 coarse_model_and_render = dict(
+    model_type='',
     num_voxels=1024000,           # expected number of voxel
     num_voxels_base=1024000,      # to rescale delta distance
     density_type='DenseGrid',     # DenseGrid, TensoRFGrid
@@ -122,6 +124,7 @@ fine_model_and_render.update(dict(
     num_voxels_base=160**3,
     image_size=(),
     equ_size=(),
+    msi_size=(),
     rgbnet_dim=12,
     alpha_init=1e-2,
     fast_color_thres=1e-4,

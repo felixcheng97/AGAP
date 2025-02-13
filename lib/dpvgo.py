@@ -297,7 +297,7 @@ class DirectPanoramaVoxGO(nn.Module):
 
         return ray_pts, t
 
-    def forward(self, rays_o, rays_d, viewdirs, global_step=None, is_train=False, **render_kwargs):
+    def forward(self, rays_o, rays_d, viewdirs, rays_mask=None, global_step=None, is_train=False, **render_kwargs):
         '''Volume rendering
         @rays_o:   [N, 3] the starting point of the N shooting rays.
         @rays_d:   [N, 3] the shooting direction of the N rays.

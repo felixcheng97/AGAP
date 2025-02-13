@@ -3,12 +3,11 @@ _base_ = '../default.py'
 basedir = './logs'
 
 data = dict(
-    dataset_type='llff',
+    dataset_type='in2n',
     ndc=True,
-    width=1008,
-    height=756,
+    factor=1,
     rand_bkgd=True,
-    move_back=False,
+    move_back=True,
 )
 
 coarse_train = dict(
@@ -34,6 +33,7 @@ _mpi_depth = 256
 _stepsize = 1.0
 
 fine_model_and_render = dict(
+    model_type='DirectMPIGO',
     k0_type='Dense2DExplicit',
     num_voxels=384*384*_mpi_depth,
     image_size=(768,),

@@ -38,12 +38,150 @@ total_variation_2d_cuda = load(
 def create_grid(type, **kwargs):
     if type == 'DenseGrid':
         return DenseGrid(**kwargs)
-    elif type == 'TensoRFGrid':
-        return TensoRFGrid(**kwargs)
-    elif type == 'Dense2DGrid':
-        return Dense2DGrid(**kwargs)
     else:
         raise NotImplementedError
+
+
+''' Dense MSI explicit
+'''
+class DenseMSIExplicit(nn.Module):
+    def __init__(self, explicit_grid, explicit_mlp, uv_min, uv_max, sigmoid=True, **kwargs):
+        super(DenseMSIExplicit, self).__init__()
+        self.explicit_grid = explicit_grid
+        self.explicit_mlp = explicit_mlp
+        self.register_buffer('uv_min', torch.tensor(uv_min))
+        self.register_buffer('uv_max', torch.tensor(uv_max))
+        self.msi_size = explicit_grid.msi_size
+        self.sigmoid = sigmoid
+        self.inference = False
+        self.loaded = False
+    
+    def forward(self, xyz, dudv=None, rays_mask=None, ray_id=None):
+        # canonical projection initialization (P_c)
+        xyz = xyz / xyz.norm(dim=-1, keepdim=True)
+        xyz = xyz.clamp(-1., 1.)
+        # xyz[xyz[..., 2] < 0] *= -1
+        x = xyz[..., 0]
+        y = xyz[..., 1]
+        z = xyz[..., 2]
+        phi = torch.asin(y)
+        theta = torch.atan2(x, z)
+        uv = torch.stack([theta, phi], dim=-1)
+
+        # projection offset (P_o)
+        if dudv is not None:
+            uv = uv + dudv
+
+        # circular rounding for phi
+        # uv[:, 0] = torch.remainder(uv[:, 0] - self.uv_min[0], self.uv_max[0] - self.uv_min[0]) + self.uv_min[0]
+
+        # normalize uv to range [-1, 1]
+        ind_norm = ((uv.contiguous() - self.uv_min) / (self.uv_max - self.uv_min)) * 2 - 1
+        
+        # if rays_mask is not None:
+        #     bg_mask = rays_mask[ray_id] == 0
+        #     detached_part = ind_norm[bg_mask].detach()
+        #     new_ind_norm = ind_norm.clone()
+        #     new_ind_norm[bg_mask] = detached_part
+        #     ind_norm = new_ind_norm.reshape(1,1,-1,2)
+        # else:
+        #     ind_norm = ind_norm.reshape(1,1,-1,2)
+        ind_norm = ind_norm.reshape(1,1,-1,2)
+
+        # get the grid for grid sample
+        if not self.loaded:
+            grid = self.explicit_grid(uv, self.explicit_mlp)
+        else:
+            grid = self.grid_loaded
+
+        # perform grid sample
+        out = F.grid_sample(grid, ind_norm, mode='bicubic', align_corners=True)
+        out = out.reshape(3, -1).T
+
+        # sigmoid for RGB
+        if not self.loaded and self.sigmoid:
+            out = F.sigmoid(out)
+
+        return out
+
+    def set_inference(self, inference):
+        self.inference = inference
+
+    def get_current_msi(self):
+        if self.explicit_mlp:
+            raise NotImplementedError
+        else:
+            rgb_logit = self.explicit_grid.grid
+        return F.sigmoid(rgb_logit) if self.sigmoid else rgb_logit
+        
+    def load(self, msi_path):
+        device = next(self.explicit_grid.parameters()).device
+        img = np.array(Image.open(msi_path))[..., :3]
+        img = torch.from_numpy(img).permute(2, 0, 1).flip((1,)).unsqueeze(0).to(device) / 255.
+        img = F.interpolate(img, size=self.msi_size, mode='bilinear', align_corners=True)
+        self.grid_loaded = img
+        self.loaded = True
+
+    def scale_msi_grid(self, new_msi_size, upsample=False):
+        self.explicit_grid.scale_msi_grid(new_msi_size, upsample)
+        self.msi_size = new_msi_size
+
+    def total_variation_2d_add_grad(self, wx, wy, dense_mode):
+        self.explicit_grid.total_variation_2d_add_grad(wx, wy, dense_mode)
+
+    def get_dense_grid(self):
+        return self.get_current_msi()
+
+    @torch.no_grad()
+    def __isub__(self, val):
+        self.grid.data -= val
+        return self
+
+    def extra_repr(self):
+        return f'inference={self.inference}, loaded={self.loaded}, sigmoid={self.sigmoid}'
+    
+
+''' Dense MSI explicit grid
+'''
+class DenseMSIExplicitGrid(nn.Module):
+    def __init__(self, channels, msi_size, **kwargs):
+        super(DenseMSIExplicitGrid, self).__init__()
+        self.channels = channels
+        self.msi_size = msi_size
+        self.grid = nn.Parameter(torch.zeros([1, channels, *msi_size]))
+
+    def forward(self, ind_norm, rgbnet=None):
+        '''
+        xyz: global coordinates to query
+        '''
+        if rgbnet:
+            raise NotImplementedError
+        else:
+            grid = self.grid
+        return grid
+
+    def scale_msi_grid(self, new_msi_size, upsample=False):
+        if not upsample:
+            self.grid = nn.Parameter(self.grid.new_zeros((1, self.channels, *new_msi_size)))
+        else:
+            self.grid = nn.Parameter(F.interpolate(self.grid.data, size=tuple(new_msi_size), mode='bicubic', align_corners=True))
+        self.msi_size = new_msi_size
+
+    def total_variation_2d_add_grad(self, wx, wy, dense_mode):
+        '''Add gradients by total variation loss in-place'''
+        total_variation_2d_cuda.total_variation_2d_add_grad(
+            self.grid, self.grid.grad, wx, wy, dense_mode)
+
+    def get_dense_grid(self):
+        return self.grid
+
+    @torch.no_grad()
+    def __isub__(self, val):
+        self.grid.data -= val
+        return self
+
+    def extra_repr(self):
+        return f'channels={self.channels}, msi_size={self.msi_size}'
 
 
 ''' Dense Equ explicit

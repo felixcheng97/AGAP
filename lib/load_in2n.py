@@ -2,6 +2,7 @@ import numpy as np
 import os, imageio
 import torch
 import scipy
+import json
 
 ########## Slightly modified version of LLFF data loading code
 ##########  see https://github.com/Fyusion/LLFF for original
@@ -82,16 +83,21 @@ def _minify(basedir, factors=[], resolutions=[]):
         print('Done')
 
 
-def _load_data(basedir, factor=None, width=None, height=None, load_imgs=True, load_depths=False):
+def _load_data(basedir, factor=None, width=None, height=None, load_imgs=True, load_depths=False, selected_frames=None):
 
-    poses_arr = np.load(os.path.join(basedir, 'poses_bounds.npy'))
-    if poses_arr.shape[1] == 17:
-        poses = poses_arr[:, :-2].reshape([-1, 3, 5]).transpose([1,2,0])
-    elif poses_arr.shape[1] == 14:
-        poses = poses_arr[:, :-2].reshape([-1, 3, 4]).transpose([1,2,0])
-    else:
-        raise NotImplementedError
-    bds = poses_arr[:, -2:].transpose([1,0])
+    f = open(os.path.join(basedir, 'transforms.json'))
+    meta = json.load(f)
+
+    frames = sorted([m for m in meta['frames']], key=lambda x:x['file_path'])
+    transfrom_matrices = [f['transform_matrix'] for f in frames]
+    poses = np.array(transfrom_matrices)[:, :3]
+    if selected_frames is not None:
+        poses = poses[[i-1 for i in selected_frames]]
+    poses = poses.transpose([1,2,0])
+
+    bds = np.zeros((poses.shape[0], 2)).transpose([1,0])
+    bds[0, :] = 1.0
+    bds[1, :] = 256.
 
     img0 = [os.path.join(basedir, 'images', f) for f in sorted(os.listdir(os.path.join(basedir, 'images'))) \
             if f.endswith('JPG') or f.endswith('jpg') or f.endswith('png')][0]
@@ -126,6 +132,9 @@ def _load_data(basedir, factor=None, width=None, height=None, load_imgs=True, lo
         return
 
     imgfiles = [os.path.join(imgdir, f) for f in sorted(os.listdir(imgdir)) if f.endswith('JPG') or f.endswith('jpg') or f.endswith('png')]
+    if selected_frames is not None:
+        imgfiles = [imgfiles[i-1] for i in selected_frames]
+    
     if poses.shape[-1] != len(imgfiles):
         print()
         print( 'Mismatch between imgs {} and poses {} !!!!'.format(len(imgfiles), poses.shape[-1]) )
@@ -148,29 +157,43 @@ def _load_data(basedir, factor=None, width=None, height=None, load_imgs=True, lo
     sh = imageio.imread(imgfiles[0]).shape
     if poses.shape[1] == 4:
         poses = np.concatenate([poses, np.zeros_like(poses[:,[0]])], 1)
-        poses[2, 4, :] = np.load(os.path.join(basedir, 'hwf_cxcy.npy'))[2]
     poses[:2, 4, :] = np.array(sh[:2]).reshape([2, 1])
     poses[2, 4, :] = poses[2, 4, :] * 1./factor
+
+    if 'fl_x' in meta.keys():
+        K = np.array([
+            [meta['fl_x'], 0, meta['cx']],
+            [0, meta['fl_y'], meta['cy']],
+            [0, 0, 1]
+        ])
+        K_render = np.array([
+            [meta['fl_x'], 0, sh[1]/2],
+            [0, meta['fl_y'], sh[0]/2],
+            [0, 0, 1]
+        ])
+    else:
+        K = np.array([[
+            [m['fl_x'], 0, m['cx']],
+            [0, m['fl_y'], m['cy']],
+            [0, 0, 1]
+        ] for m in meta['frames']])
+        m = meta['frames'][0]
+        K_render = np.array([
+            [m['fl_x'], 0, sh[1]/2],
+            [0, m['fl_y'], sh[0]/2],
+            [0, 0, 1]
+        ])
 
     if not load_imgs:
         return poses, bds
 
-
     imgs = imgs = [imread(f)[...,:3]/255. for f in imgfiles]
     imgs = np.stack(imgs, -1)
-    try:
-        maskdir = os.path.join(basedir, 'seg')
-        maskfiles = [os.path.join(maskdir, f) for f in sorted(os.listdir(maskdir)) if f.endswith('JPG') or f.endswith('jpg') or f.endswith('png')]
-        from PIL import Image
-        masks = [np.array(Image.open(m).resize((sh[:2][::-1])).convert('L')) > 127.5 for m in maskfiles]
-        masks = np.stack(masks, -1)
-    except:
-        masks = None
 
     print('Loaded image data', imgs.shape, poses[:,-1,0])
 
     if not load_depths:
-        return poses, bds, imgs, masks
+        return poses, bds, imgs, K, K_render
 
     depthdir = os.path.join(basedir, 'stereo', 'depth_maps')
     assert os.path.exists(depthdir), f'Dir not found: {depthdir}'
@@ -181,7 +204,7 @@ def _load_data(basedir, factor=None, width=None, height=None, load_imgs=True, lo
     depths = [depthread(f) for f in depthfiles]
     depths = np.stack(depths, -1)
     print('Loaded depth data', depths.shape)
-    return poses, bds, imgs, masks, depths
+    return poses, bds, imgs, K, K_render, depths
 
 
 def normalize(x):
@@ -332,13 +355,13 @@ def spherify_poses(poses, bds, depths):
     return poses_reset, radius, bds, depths
 
 
-def load_llff_data(basedir, factor=8, width=None, height=None,
-                   recenter=True, rerotate=False, move_back=False,
-                   bd_factor=.75, spherify=False, path_zflat=False, load_depths=False,
+def load_in2n_data(basedir, factor=8, width=None, height=None,
+                   recenter=True, rerotate=True, move_back=True,
+                   bd_factor=.75, spherify=False, path_zflat=False, load_depths=False, selected_frames=None,
                    movie_render_kwargs={}):
 
-    poses, bds, imgs, masks, *depths = _load_data(basedir, factor=factor, width=width, height=height,
-                                           load_depths=load_depths) # factor=8 downsamples original imgs by 8x
+    poses, bds, imgs, K, K_render, *depths = _load_data(basedir, factor=factor, width=width, height=height,
+                                           load_depths=load_depths, selected_frames=selected_frames) # factor=8 downsamples original imgs by 8x
     print('Loaded', basedir, bds.min(), bds.max())
     if load_depths:
         depths = depths[0]
@@ -346,13 +369,17 @@ def load_llff_data(basedir, factor=8, width=None, height=None,
         depths = 0
 
     # Correct rotation matrix ordering and move variable dim to axis 0
-    poses = np.concatenate([poses[:, 1:2, :], -poses[:, 0:1, :], poses[:, 2:, :]], 1)
+
+    
+    # poses = np.concatenate([poses[:, 0:1, :], -poses[:, 1:2, :], -poses[:, 2:3, :], poses[:, 3:, :]], 1)
+    # poses = np.concatenate([poses[:, 1:2, :], -poses[:, 0:1, :], poses[:, 2:, :]], 1)
+    poses = poses
+    # poses = np.concatenate([-poses[:, 0:1, :], poses[:, 1:2, :], -poses[:, 2:3, :], poses[:, 3:, :]], 1)
+
     poses = np.moveaxis(poses, -1, 0).astype(np.float32)
     imgs = np.moveaxis(imgs, -1, 0).astype(np.float32)
     images = imgs
     bds = np.moveaxis(bds, -1, 0).astype(np.float32)
-    if masks is not None:
-        masks = np.moveaxis(masks, -1, 0).astype(np.float32)
 
     # Rescale if bd_factor is provided
     if bds.min() < 0 and bd_factor is not None:
@@ -373,7 +400,7 @@ def load_llff_data(basedir, factor=8, width=None, height=None,
         poses, radius, bds, depths = spherify_poses(poses, bds, depths)
         if rerotate:
             poses = rerotate_poses(poses)
-        # poses = recenter_poses(poses)
+        poses = recenter_poses(poses)
 
         ### generate spiral poses for rendering fly-through movie
         centroid = poses[:,:3,3].mean(0)
@@ -411,6 +438,48 @@ def load_llff_data(basedir, factor=8, width=None, height=None,
         render_poses = np.concatenate([render_poses, np.broadcast_to(poses[0,:3,-1:], render_poses[:,:3,-1:].shape)], -1)
 
     else:
+        # def three_js_perspective_camera_focal_length(fov: float, image_height: int):
+        #     """Returns the focal length of a three.js perspective camera.
+
+        #     Args:
+        #         fov: the field of view of the camera in degrees.
+        #         image_height: the height of the image in pixels.
+        #     """
+        #     if fov is None:
+        #         print("Warning: fov is None, using default value")
+        #         return 50
+        #     pp_h = image_height / 2.0
+        #     focal_length = pp_h / np.tan(fov * (np.pi / 180.0) / 2.0)
+        #     return focal_length
+
+        # f = open('/home/zjl/disk1/Panorama_Field/data/in2n_data/face/camera_paths/final-path.json')
+        # path = json.load(f)
+        # render_height = path['render_height']
+        # render_width = path['render_width']
+        # render_poses = [cam['camera_to_world'] for cam in path['camera_path']]
+        # render_poses = np.array(render_poses)
+        # render_poses = render_poses.reshape(render_poses.shape[0], 4, 4)
+        # render_poses = render_poses[:, :3, :]
+
+        # K_render = np.array([[
+        #     [three_js_perspective_camera_focal_length(path['camera_path'][0]['fov'], render_height), 0., render_width/2],
+        #     [0., three_js_perspective_camera_focal_length(path['camera_path'][0]['fov'], render_height), render_height/2],
+        #     [0., 0., 1.]
+        # ] for cam in path['camera_path']])
+
+        # bottom = np.reshape([0,0,0,1.], [1,4])
+        # c2w_ref = poses_avg_back(poses)
+        # c2w_ref = np.concatenate([c2w_ref[:3,:4], bottom], -2)
+        # bottom = np.tile(np.reshape(bottom, [1,1,4]), [render_poses.shape[0],1,1])
+        # render_poses = np.concatenate([render_poses[:,:3,:4], bottom], -2)
+
+        # render_poses = np.linalg.inv(c2w_ref) @ render_poses
+        # render_poses = render_poses[:,:3,:4]
+
+        # render_poses = render_poses[:10]
+        # K_render = K_render[:10]
+
+        # import pdb; pdb.set_trace()
 
         c2w = poses_avg(poses)
         print('recentered', c2w.shape)
@@ -430,7 +499,8 @@ def load_llff_data(basedir, factor=8, width=None, height=None,
         zdelta = movie_render_kwargs.get('zdelta', 0.5)
         zrate = movie_render_kwargs.get('zrate', 1.0)
         tt = poses[:,:3,3] # ptstocam(poses[:3,3,:].T, c2w).T
-        rads = np.percentile(np.abs(tt), 90, 0) * movie_render_kwargs.get('scale_r', 1)
+        rads = np.percentile(np.abs(tt), movie_render_kwargs['percentile'], 0) * movie_render_kwargs.get('scale_r', 1)
+        rads[2] = movie_render_kwargs['z']
         c2w_path = c2w
         N_views = 120
         N_rots = movie_render_kwargs.get('N_rots', 1)
@@ -451,7 +521,6 @@ def load_llff_data(basedir, factor=8, width=None, height=None,
         c2w = poses_avg_back(poses)
     else:
         c2w = poses_avg(poses)
-    # c2w = poses_avg(poses)
     print('Data:')
     print(poses.shape, images.shape, bds.shape)
 
@@ -462,5 +531,6 @@ def load_llff_data(basedir, factor=8, width=None, height=None,
     images = images.astype(np.float32)
     poses = poses.astype(np.float32)
 
-    return images, masks, depths, poses, bds, render_poses, i_test
+    return images, depths, poses, bds, render_poses, i_test, K, K_render
+
 

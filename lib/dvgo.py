@@ -330,7 +330,7 @@ class DirectVoxGO(torch.nn.Module):
         step_id = step_id[mask_inbbox]
         return ray_pts, ray_id, step_id
 
-    def forward(self, rays_o, rays_d, viewdirs, global_step=None, **render_kwargs):
+    def forward(self, rays_o, rays_d, viewdirs, rays_mask=None, global_step=None, **render_kwargs):
         '''Volume rendering
         @rays_o:   [N, 3] the starting point of the N shooting rays.
         @rays_d:   [N, 3] the shooting direction of the N rays.
@@ -603,13 +603,11 @@ def get_training_rays_panorama(rgb_tr, train_poses, HW):
     return rgb_tr, rays_o_tr, rays_d_tr, viewdirs_tr, imsz
 
 @torch.no_grad()
-def get_training_rays(rgb_tr, train_poses, HW, Ks, ndc, inverse_y, flip_x, flip_y):
+def get_training_rays(rgb_tr, mask_tr, train_poses, HW, Ks, ndc, inverse_y, flip_x, flip_y):
     print('get_training_rays: start')
     assert len(np.unique(HW, axis=0)) == 1
-    assert len(np.unique(Ks.reshape(len(Ks),-1), axis=0)) == 1
     assert len(rgb_tr) == len(train_poses) and len(rgb_tr) == len(Ks) and len(rgb_tr) == len(HW)
     H, W = HW[0]
-    K = Ks[0]
     eps_time = time.time()
     rays_o_tr = torch.zeros([len(rgb_tr), H, W, 3], device=rgb_tr.device)
     rays_d_tr = torch.zeros([len(rgb_tr), H, W, 3], device=rgb_tr.device)
@@ -617,36 +615,42 @@ def get_training_rays(rgb_tr, train_poses, HW, Ks, ndc, inverse_y, flip_x, flip_
     imsz = [1] * len(rgb_tr)
     for i, c2w in enumerate(train_poses):
         rays_o, rays_d, viewdirs = get_rays_of_a_view(
-                H=H, W=W, K=K, c2w=c2w, ndc=ndc, inverse_y=inverse_y, flip_x=flip_x, flip_y=flip_y)
+                H=H, W=W, K=Ks[i], c2w=c2w, ndc=ndc, inverse_y=inverse_y, flip_x=flip_x, flip_y=flip_y)
         rays_o_tr[i].copy_(rays_o.to(rgb_tr.device))
         rays_d_tr[i].copy_(rays_d.to(rgb_tr.device))
         viewdirs_tr[i].copy_(viewdirs.to(rgb_tr.device))
         del rays_o, rays_d, viewdirs
     eps_time = time.time() - eps_time
     print('get_training_rays: finish (eps time:', eps_time, 'sec)')
-    return rgb_tr, rays_o_tr, rays_d_tr, viewdirs_tr, imsz
+    return rgb_tr, mask_tr, rays_o_tr, rays_d_tr, viewdirs_tr, imsz
 
 
 @torch.no_grad()
-def get_training_rays_flatten(rgb_tr_ori, train_poses, HW, Ks, ndc, inverse_y, flip_x, flip_y):
+def get_training_rays_flatten(rgb_tr_ori, mask_tr_ori, train_poses, HW, Ks, ndc, inverse_y, flip_x, flip_y):
     print('get_training_rays_flatten: start')
     assert len(rgb_tr_ori) == len(train_poses) and len(rgb_tr_ori) == len(Ks) and len(rgb_tr_ori) == len(HW)
     eps_time = time.time()
     DEVICE = rgb_tr_ori[0].device
     N = sum(im.shape[0] * im.shape[1] for im in rgb_tr_ori)
     rgb_tr = torch.zeros([N,3], device=DEVICE)
+    if mask_tr_ori[0] is not None:
+        mask_tr = torch.zeros([N], device=DEVICE)
+    else:
+        mask_tr = None
     rays_o_tr = torch.zeros_like(rgb_tr)
     rays_d_tr = torch.zeros_like(rgb_tr)
     viewdirs_tr = torch.zeros_like(rgb_tr)
     imsz = []
     top = 0
-    for c2w, img, (H, W), K in zip(train_poses, rgb_tr_ori, HW, Ks):
+    for c2w, img, mask, (H, W), K in zip(train_poses, rgb_tr_ori, mask_tr_ori, HW, Ks):
         assert img.shape[:2] == (H, W)
         rays_o, rays_d, viewdirs = get_rays_of_a_view(
                 H=H, W=W, K=K, c2w=c2w, ndc=ndc,
                 inverse_y=inverse_y, flip_x=flip_x, flip_y=flip_y)
         n = H * W
         rgb_tr[top:top+n].copy_(img.flatten(0,1))
+        if mask is not None:
+            mask_tr[top:top+n].copy_(mask.flatten(0,1))
         rays_o_tr[top:top+n].copy_(rays_o.flatten(0,1).to(DEVICE))
         rays_d_tr[top:top+n].copy_(rays_d.flatten(0,1).to(DEVICE))
         viewdirs_tr[top:top+n].copy_(viewdirs.flatten(0,1).to(DEVICE))
@@ -656,7 +660,7 @@ def get_training_rays_flatten(rgb_tr_ori, train_poses, HW, Ks, ndc, inverse_y, f
     assert top == N
     eps_time = time.time() - eps_time
     print('get_training_rays_flatten: finish (eps time:', eps_time, 'sec)')
-    return rgb_tr, rays_o_tr, rays_d_tr, viewdirs_tr, imsz
+    return rgb_tr, mask_tr, rays_o_tr, rays_d_tr, viewdirs_tr, imsz
 
 
 @torch.no_grad()

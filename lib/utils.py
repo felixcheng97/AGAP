@@ -11,6 +11,12 @@ import torch.nn.functional as F
 from .masked_adam import MaskedAdam
 
 
+import numpy as np
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+import open3d as o3d
+
+
 ''' Misc
 '''
 mse2psnr = lambda x : -10. * torch.log10(x)
@@ -114,3 +120,107 @@ def rgb_ssim(img0, img1, max_val,
     ssim = np.mean(ssim_map)
     return ssim_map if return_map else ssim
 
+
+
+def plot_camera_poses(savedir, c2w, xyz_min, xyz_max):
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
+    
+    # Extract the camera positions (origins of the camera poses)
+    camera_positions = c2w[:, :3, 3]
+    max_val_x = np.max(np.abs(camera_positions[:, 0]))
+    max_val_y = np.max(np.abs(camera_positions[:, 1]))
+    max_val_z = np.max(np.abs(camera_positions[:, 2]))
+    max_val = np.min([max_val_x, max_val_y, max_val_z])
+    
+    # Plot the global coordinate system
+    ax.quiver(0, 0, 0, 1, 0, 0, color='r', length=max_val)
+    ax.quiver(0, 0, 0, 0, 1, 0, color='g', length=max_val)
+    ax.quiver(0, 0, 0, 0, 0, 1, color='b', length=max_val)
+    
+    for pose in c2w:
+        origin = pose[:3, 3]
+        x_axis = pose[:3, 0]
+        y_axis = pose[:3, 1]
+        z_axis = pose[:3, 2]
+        
+        ax.quiver(*origin, *x_axis, color='r', length=max_val / 5)
+        ax.quiver(*origin, *y_axis, color='g', length=max_val / 5)
+        ax.quiver(*origin, *z_axis, color='b', length=max_val / 5)
+    
+    # Set labels and limits based on the maximum absolute value of the positions
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
+    ax.set_xlim([-max_val_x, max_val_x])
+    ax.set_ylim([-max_val_y, max_val_y])
+    ax.set_zlim([-max_val_z, max_val_z])
+
+    # Draw the cube (edges only) indicated by the xyz_min and xyz_max
+    corners = np.array([[xyz_min[0], xyz_min[1], xyz_min[2]],
+                        [xyz_max[0], xyz_min[1], xyz_min[2]],
+                        [xyz_max[0], xyz_max[1], xyz_min[2]],
+                        [xyz_min[0], xyz_max[1], xyz_min[2]],
+                        [xyz_min[0], xyz_min[1], xyz_max[2]],
+                        [xyz_max[0], xyz_min[1], xyz_max[2]],
+                        [xyz_max[0], xyz_max[1], xyz_max[2]],
+                        [xyz_min[0], xyz_max[1], xyz_max[2]]])
+
+    edges = [
+        [0, 1], [1, 2], [2, 3], [3, 0],  # bottom face
+        [4, 5], [5, 6], [6, 7], [7, 4],  # top face
+        [0, 4], [1, 5], [2, 6], [3, 7]   # vertical edges
+    ]
+
+    for edge in edges:
+        p1, p2 = corners[edge]
+        ax.plot([p1[0], p2[0]], [p1[1], p2[1]], [p1[2], p2[2]], 'k-', linewidth=0.5)
+    
+    # Add a title with a message
+    title_msg = f"Camera Poses Visualization (Max Values: X={max_val_x:.2f}, Y={max_val_y:.2f}, Z={max_val_z:.2f})"
+    plt.title(title_msg)
+    
+    # Save the plot
+    if not os.path.exists(savedir):
+        os.makedirs(savedir)
+    plt.savefig(os.path.join(savedir, 'camera_poses.png'))
+
+
+def create_line_set(c2w):
+    points = []
+    lines = []
+    colors = []
+    
+    line_idx = 0
+    for pose in c2w:
+        origin = pose[:3, 3]
+        x_axis = origin + pose[:3, 0] * 0.1
+        y_axis = origin + pose[:3, 1] * 0.1
+        z_axis = origin + pose[:3, 2] * 0.1
+        
+        points.append(origin)
+        points.append(x_axis)
+        points.append(origin)
+        points.append(y_axis)
+        points.append(origin)
+        points.append(z_axis)
+        
+        lines.append([line_idx, line_idx + 1])
+        lines.append([line_idx + 2, line_idx + 3])
+        lines.append([line_idx + 4, line_idx + 5])
+        
+        colors.append([1, 0, 0])  # Red for x-axis
+        colors.append([0, 1, 0])  # Green for y-axis
+        colors.append([0, 0, 1])  # Blue for z-axis
+        
+        line_idx += 6
+    
+    return points, lines, colors
+
+def save_as_ply(c2w, filename='camera_poses.ply'):
+    points, lines, colors = create_line_set(c2w)
+    line_set = o3d.geometry.LineSet()
+    line_set.points = o3d.utility.Vector3dVector(points)
+    line_set.lines = o3d.utility.Vector2iVector(lines)
+    line_set.colors = o3d.utility.Vector3dVector(colors)
+    o3d.io.write_line_set(filename, line_set)

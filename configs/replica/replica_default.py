@@ -26,6 +26,7 @@ fine_train = dict(
 )
 
 fine_model_and_render = dict(
+    model_type='DirectPanoramaVoxGO',
     k0_type='DenseEquExplicit',
     num_voxels=320**3,
     num_voxels_base=320**3,
